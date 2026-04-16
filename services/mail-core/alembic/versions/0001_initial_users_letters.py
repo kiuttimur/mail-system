@@ -15,6 +15,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Базовая схема первого релиза: пользователи и письма между ними.
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -44,6 +45,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Откат идёт в обратном порядке, чтобы сначала снять зависимости писем.
     op.drop_index("ix_letters_created_at", table_name="letters")
     op.drop_index("ix_letters_recipient_id", table_name="letters")
     op.drop_index("ix_letters_sender_id", table_name="letters")

@@ -1,3 +1,5 @@
+"""Настройка Alembic для запуска миграций внутри mail-core."""
+
 from __future__ import annotations
 
 import os
@@ -46,6 +48,8 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section) or {}
+    # URL подставляем из settings, чтобы Alembic использовал тот же .env,
+    # что и само приложение.
     configuration["sqlalchemy.url"] = get_database_url()
 
     connectable = engine_from_config(

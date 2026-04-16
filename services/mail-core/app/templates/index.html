@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<!-- Простой UI: сначала авторизация, затем кабинет пользователя с письмами. -->
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mail Core Web</title>
+    <style>
+        :root {
+            --bg: #f4efe6;
+            --surface: rgba(255, 252, 247, 0.94);
+            --surface-strong: #fffdf9;
+            --line: #d8cbb8;
+            --ink: #2b2118;
+            --muted: #6e5d4b;
+            --accent: #b85c38;
+            --accent-strong: #8f3f20;
+            --ok: #2e7d5b;
+            --error: #a23b2a;
+            --shadow: 0 18px 45px rgba(77, 56, 34, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(184, 92, 56, 0.18), transparent 32%),
+                radial-gradient(circle at top right, rgba(143, 63, 32, 0.12), transparent 28%),
+                linear-gradient(180deg, #f7f1e8 0%, #efe6d8 100%);
+        }
+
+        .shell {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 28px 20px 56px;
+        }
+
+        .hero,
+        .panel {
+            background: var(--surface);
+            border: 1px solid rgba(216, 203, 184, 0.85);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+        }
+
+        .hero {
+            padding: 28px;
+            display: grid;
+            gap: 12px;
+        }
+
+        .hero h1,
+        .panel h2 {
+            margin: 0;
+            font-family: Georgia, "Times New Roman", serif;
+        }
+
+        .hero h1 {
+            font-size: clamp(2rem, 4vw, 3.3rem);
+            line-height: 1.04;
+        }
+
+        .hero p,
+        .panel p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .hero-links,
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .hero-links a {
+            color: var(--accent-strong);
+            text-decoration: none;
+            font-weight: 700;
+        }
+
+        .status {
+            margin-top: 18px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            border: 1px solid transparent;
+            background: rgba(255, 253, 249, 0.74);
+            color: var(--muted);
+            min-height: 52px;
+            display: flex;
+            align-items: center;
+        }
+
+        .status.ok {
+            border-color: rgba(46, 125, 91, 0.28);
+            color: var(--ok);
+            background: rgba(46, 125, 91, 0.08);
+        }
+
+        .status.error {
+            border-color: rgba(162, 59, 42, 0.28);
+            color: var(--error);
+            background: rgba(162, 59, 42, 0.08);
+        }
+
+        .auth-wrap,
+        .dashboard {
+            margin-top: 22px;
+        }
+
+        .auth-wrap {
+            display: grid;
+            gap: 18px;
+        }
+
+        .auth-card {
+            max-width: 540px;
+            padding: 22px;
+        }
+
+        .toggle-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .toggle-row button {
+            flex: 1;
+        }
+
+        .dashboard[hidden],
+        .auth-wrap[hidden],
+        .auth-form[hidden] {
+            display: none;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 18px;
+        }
+
+        .panel {
+            grid-column: span 12;
+            padding: 22px;
+        }
+
+        .span-4 {
+            grid-column: span 4;
+        }
+
+        .span-8 {
+            grid-column: span 8;
+        }
+
+        .form-grid {
+            display: grid;
+            gap: 14px;
+        }
+
+        label {
+            display: grid;
+            gap: 8px;
+            font-size: 0.95rem;
+            font-weight: 700;
+        }
+
+        input,
+        textarea,
+        button {
+            font: inherit;
+        }
+
+        input,
+        textarea {
+            width: 100%;
+            padding: 12px 14px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: #fffdfa;
+            color: var(--ink);
+        }
+
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        button {
+            border: 0;
+            border-radius: 999px;
+            padding: 11px 18px;
+            background: var(--accent);
+            color: #fff;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.15s ease, background 0.15s ease;
+        }
+
+        button:hover {
+            background: var(--accent-strong);
+            transform: translateY(-1px);
+        }
+
+        button.secondary {
+            background: #ece2d1;
+            color: var(--ink);
+        }
+
+        button.secondary:hover {
+            background: #dfd0b8;
+        }
+
+        button.ghost {
+            background: transparent;
+            color: var(--accent-strong);
+            border: 1px solid rgba(184, 92, 56, 0.3);
+        }
+
+        button.active-mode {
+            background: var(--accent-strong);
+        }
+
+        .session-panel {
+            margin-top: 16px;
+            padding: 16px;
+            border-radius: 18px;
+            background: #f7f0e4;
+            border: 1px solid rgba(216, 203, 184, 0.85);
+            display: grid;
+            gap: 8px;
+        }
+
+        .meta {
+            color: var(--muted);
+            font-size: 0.92rem;
+        }
+
+        .letter-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: grid;
+            gap: 12px;
+        }
+
+        .letter-item {
+            padding: 14px 16px;
+            border-radius: 18px;
+            background: #fbf7f1;
+            border: 1px solid rgba(216, 203, 184, 0.82);
+        }
+
+        .letter-item strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            margin-top: 8px;
+        }
+
+        .badge.unread {
+            background: rgba(184, 92, 56, 0.12);
+            color: var(--accent-strong);
+        }
+
+        .badge.read {
+            background: rgba(46, 125, 91, 0.1);
+            color: var(--ok);
+        }
+
+        .empty {
+            color: var(--muted);
+            padding-top: 6px;
+        }
+
+        .letter-actions {
+            margin-top: 12px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        @media (max-width: 960px) {
+            .span-4,
+            .span-8 {
+                grid-column: span 12;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <section class="hero">
+            <h1>Mail Core Web</h1>
+            <p>
+                Сначала пользователь входит или регистрируется, а затем попадает в свой кабинет:
+                отправляет письма по логину получателя и отдельно смотрит непрочитанные,
+                прочитанные и отправленные письма.
+            </p>
+            <div class="hero-links">
+                <a href="/docs" target="_blank" rel="noreferrer">Swagger /docs</a>
+                <a href="/health" target="_blank" rel="noreferrer">Проверка /health</a>
+            </div>
+            <div id="status" class="status">Открой вход или регистрацию, чтобы перейти в аккаунт.</div>
+        </section>
+
+        <section id="auth-view" class="auth-wrap">
+            <article class="panel auth-card">
+                <h2>Добро пожаловать</h2>
+                <p>Первым экраном открывается авторизация. Выбери нужное действие и войди в свой аккаунт.</p>
+                <div class="toggle-row">
+                    <button type="button" id="show-login-button" class="active-mode">Вход</button>
+                    <button type="button" id="show-register-button" class="secondary">Регистрация</button>
+                </div>
+
+                <form id="login-form" class="form-grid auth-form">
+                    <label>
+                        Логин
+                        <input id="login-username" type="text" minlength="3" maxlength="50" placeholder="например, alice" required>
+                    </label>
+                    <label>
+                        Пароль
+                        <input id="login-password" type="password" minlength="8" maxlength="128" placeholder="введи пароль" required>
+                    </label>
+                    <div class="actions">
+                        <button type="submit">Войти в аккаунт</button>
+                    </div>
+                </form>
+
+                <form id="register-form" class="form-grid auth-form" hidden>
+                    <label>
+                        Новый логин
+                        <input id="register-username" type="text" minlength="3" maxlength="50" placeholder="например, maria" required>
+                    </label>
+                    <label>
+                        Пароль
+                        <input id="register-password" type="password" minlength="8" maxlength="128" placeholder="минимум 8 символов" required>
+                    </label>
+                    <div class="actions">
+                        <button type="submit">Создать аккаунт</button>
+                    </div>
+                </form>
+            </article>
+        </section>
+
+        <section id="dashboard" class="dashboard" hidden>
+            <div class="grid">
+                <article class="panel span-4">
+                    <h2>Аккаунт</h2>
+                    <p>После входа можно отправлять письма только от имени текущего пользователя.</p>
+                    <div class="session-panel">
+                        <strong id="current-user-label">Пользователь не выбран</strong>
+                        <div class="meta" id="current-user-meta">Войди или зарегистрируйся, чтобы увидеть данные аккаунта.</div>
+                    </div>
+                    <div class="actions">
+                        <button type="button" class="secondary" id="refresh-mailbox-button">Обновить письма</button>
+                        <button type="button" class="ghost" id="logout-button">Выйти</button>
+                    </div>
+                </article>
+
+                <article class="panel span-8">
+                    <h2>Отправить письмо</h2>
+                    <p>Укажи логин получателя. Если такого логина нет в базе, сервис покажет ошибку.</p>
+                    <form id="send-letter-form" class="form-grid">
+                        <label>
+                            Получатель
+                            <input id="recipient-username" type="text" minlength="3" maxlength="50" placeholder="логин получателя" required>
+                        </label>
+                        <label>
+                            Тема
+                            <input id="subject" type="text" maxlength="120" placeholder="тема письма" required>
+                        </label>
+                        <label>
+                            Текст письма
+                            <textarea id="body" maxlength="10000" placeholder="напиши письмо..." required></textarea>
+                        </label>
+                        <div class="actions">
+                            <button type="submit">Отправить письмо</button>
+                        </div>
+                    </form>
+                </article>
+
+                <article class="panel span-4">
+                    <h2>Непрочитанные</h2>
+                    <p>Новые письма, которые текущий пользователь ещё не открывал.</p>
+                    <ul id="unread-letters-list" class="letter-list" aria-live="polite"></ul>
+                    <div id="unread-empty" class="empty" hidden>Непрочитанных писем нет.</div>
+                </article>
+
+                <article class="panel span-4">
+                    <h2>Прочитанные</h2>
+                    <p>Входящие письма, которые уже были отмечены как прочитанные.</p>
+                    <ul id="read-letters-list" class="letter-list" aria-live="polite"></ul>
+                    <div id="read-empty" class="empty" hidden>Прочитанных писем пока нет.</div>
+                </article>
+
+                <article class="panel span-4">
+                    <h2>Отправленные</h2>
+                    <p>История писем, которые текущий пользователь уже отправил.</p>
+                    <ul id="sent-letters-list" class="letter-list" aria-live="polite"></ul>
+                    <div id="sent-empty" class="empty" hidden>Отправленных писем пока нет.</div>
+                </article>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const statusBox = document.getElementById("status");
+        const authView = document.getElementById("auth-view");
+        const dashboard = document.getElementById("dashboard");
+
+        const showLoginButton = document.getElementById("show-login-button");
+        const showRegisterButton = document.getElementById("show-register-button");
+        const loginForm = document.getElementById("login-form");
+        const registerForm = document.getElementById("register-form");
+
+        const currentUserLabel = document.getElementById("current-user-label");
+        const currentUserMeta = document.getElementById("current-user-meta");
+        const refreshMailboxButton = document.getElementById("refresh-mailbox-button");
+        const logoutButton = document.getElementById("logout-button");
+        const sendLetterForm = document.getElementById("send-letter-form");
+
+        const unreadLettersList = document.getElementById("unread-letters-list");
+        const readLettersList = document.getElementById("read-letters-list");
+        const sentLettersList = document.getElementById("sent-letters-list");
+        const unreadEmpty = document.getElementById("unread-empty");
+        const readEmpty = document.getElementById("read-empty");
+        const sentEmpty = document.getElementById("sent-empty");
+
+        let currentUser = null;
+
+        function setStatus(message, type = "") {
+            statusBox.textContent = message;
+            statusBox.className = `status ${type}`.trim();
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+        }
+
+        async function requestJson(url, options = {}) {
+            const response = await fetch(url, {
+                headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+                ...options,
+            });
+
+            if (!response.ok) {
+                let detail = `HTTP ${response.status}`;
+                try {
+                    const payload = await response.json();
+                    if (payload && payload.detail) {
+                        detail = payload.detail;
+                    }
+                } catch (_error) {
+                }
+                throw new Error(detail);
+            }
+
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+                return response.json();
+            }
+
+            return null;
+        }
+
+        function setAuthMode(mode) {
+            const isLogin = mode === "login";
+            loginForm.hidden = !isLogin;
+            registerForm.hidden = isLogin;
+            showLoginButton.className = isLogin ? "active-mode" : "secondary";
+            showRegisterButton.className = isLogin ? "secondary" : "active-mode";
+        }
+
+        function showDashboard() {
+            authView.hidden = true;
+            dashboard.hidden = false;
+        }
+
+        function showAuthView() {
+            authView.hidden = false;
+            dashboard.hidden = true;
+        }
+
+        function renderCurrentUser() {
+            if (!currentUser) {
+                currentUserLabel.textContent = "Пользователь не выбран";
+                currentUserMeta.textContent = "Войди или зарегистрируйся, чтобы увидеть данные аккаунта.";
+                return;
+            }
+
+            currentUserLabel.textContent = `${currentUser.username} (id ${currentUser.id})`;
+            currentUserMeta.textContent = `Аккаунт создан: ${new Date(currentUser.created_at).toLocaleString("ru-RU")}`;
+        }
+
+        function renderLetterList(target, emptyTarget, letters, mode) {
+            target.innerHTML = "";
+            emptyTarget.hidden = letters.length > 0;
+
+            for (const letter of letters) {
+                const item = document.createElement("li");
+                item.className = "letter-item";
+                const badgeClass = mode === "unread" ? "badge unread" : "badge read";
+                const badgeLabel = mode === "unread" ? "Не прочитано" : "Прочитано";
+                const actionButton = mode === "unread"
+                    ? `
+                        <div class="letter-actions">
+                            <button type="button" class="ghost" data-letter-id="${letter.id}">
+                                Отметить прочитанным
+                            </button>
+                        </div>
+                    `
+                    : "";
+
+                item.innerHTML = `
+                    <strong>${escapeHtml(letter.subject)}</strong>
+                    <div class="meta">от: ${letter.sender_id} | кому: ${letter.recipient_id}</div>
+                    <div class="meta">создано: ${new Date(letter.created_at).toLocaleString("ru-RU")}</div>
+                    <p>${escapeHtml(letter.body).replaceAll("\\n", "<br>")}</p>
+                    <span class="${badgeClass}">${badgeLabel}</span>
+                    ${actionButton}
+                `;
+                target.appendChild(item);
+            }
+        }
+
+        function renderSentLetters(letters) {
+            sentLettersList.innerHTML = "";
+            sentEmpty.hidden = letters.length > 0;
+
+            for (const letter of letters) {
+                const item = document.createElement("li");
+                item.className = "letter-item";
+                item.innerHTML = `
+                    <strong>${escapeHtml(letter.subject)}</strong>
+                    <div class="meta">получатель id: ${letter.recipient_id}</div>
+                    <div class="meta">создано: ${new Date(letter.created_at).toLocaleString("ru-RU")}</div>
+                    <p>${escapeHtml(letter.body).replaceAll("\\n", "<br>")}</p>
+                `;
+                sentLettersList.appendChild(item);
+            }
+        }
+
+        async function loadMailbox() {
+            if (!currentUser) {
+                return;
+            }
+
+            const unreadLetters = await requestJson(`/letters/inbox/${currentUser.id}?unread_only=true&limit=50&offset=0`);
+            const allInboxLetters = await requestJson(`/letters/inbox/${currentUser.id}?unread_only=false&limit=50&offset=0`);
+            const sentLetters = await requestJson(`/letters/sent/${currentUser.id}?limit=50&offset=0`);
+            const readLetters = allInboxLetters.filter((letter) => letter.is_read);
+
+            renderLetterList(unreadLettersList, unreadEmpty, unreadLetters, "unread");
+            renderLetterList(readLettersList, readEmpty, readLetters, "read");
+            renderSentLetters(sentLetters);
+        }
+
+        async function enterAccount(user, message) {
+            currentUser = user;
+            renderCurrentUser();
+            showDashboard();
+            await loadMailbox();
+            setStatus(message, "ok");
+        }
+
+        showLoginButton.addEventListener("click", () => {
+            setAuthMode("login");
+        });
+
+        showRegisterButton.addEventListener("click", () => {
+            setAuthMode("register");
+        });
+
+        loginForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const username = document.getElementById("login-username").value.trim();
+            const password = document.getElementById("login-password").value;
+
+            try {
+                const user = await requestJson("/auth/login", {
+                    method: "POST",
+                    body: JSON.stringify({ username, password }),
+                });
+                loginForm.reset();
+                await enterAccount(user, `Вход выполнен: ${user.username}.`);
+            } catch (error) {
+                setStatus(`Не удалось войти: ${error.message}`, "error");
+            }
+        });
+
+        registerForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const username = document.getElementById("register-username").value.trim();
+            const password = document.getElementById("register-password").value;
+
+            try {
+                const user = await requestJson("/users", {
+                    method: "POST",
+                    body: JSON.stringify({ username, password }),
+                });
+                registerForm.reset();
+                await enterAccount(user, `Аккаунт ${user.username} создан, вход выполнен автоматически.`);
+            } catch (error) {
+                setStatus(`Не удалось зарегистрироваться: ${error.message}`, "error");
+            }
+        });
+
+        sendLetterForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            if (!currentUser) {
+                setStatus("Сначала нужно войти в аккаунт.", "error");
+                return;
+            }
+
+            const recipientUsername = document.getElementById("recipient-username").value.trim();
+            const subject = document.getElementById("subject").value.trim();
+            const body = document.getElementById("body").value.trim();
+
+            try {
+                const recipient = await requestJson(`/users/by-username/${encodeURIComponent(recipientUsername)}`);
+                const letter = await requestJson("/letters", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        sender_id: currentUser.id,
+                        recipient_id: recipient.id,
+                        subject,
+                        body,
+                    }),
+                });
+
+                sendLetterForm.reset();
+                await loadMailbox();
+                setStatus(`Письмо #${letter.id} отправлено пользователю ${recipient.username}.`, "ok");
+            } catch (error) {
+                setStatus(`Не удалось отправить письмо: ${error.message}`, "error");
+            }
+        });
+
+        refreshMailboxButton.addEventListener("click", async () => {
+            try {
+                await loadMailbox();
+                setStatus("Почтовый ящик обновлён.", "ok");
+            } catch (error) {
+                setStatus(`Не удалось обновить письма: ${error.message}`, "error");
+            }
+        });
+
+        logoutButton.addEventListener("click", () => {
+            currentUser = null;
+            renderCurrentUser();
+            showAuthView();
+            setAuthMode("login");
+            unreadLettersList.innerHTML = "";
+            readLettersList.innerHTML = "";
+            sentLettersList.innerHTML = "";
+            unreadEmpty.hidden = false;
+            readEmpty.hidden = false;
+            sentEmpty.hidden = false;
+            setStatus("Выход выполнен. Снова доступны вход и регистрация.", "ok");
+        });
+
+        unreadLettersList.addEventListener("click", async (event) => {
+            const button = event.target.closest("button[data-letter-id]");
+            if (!button || !currentUser) {
+                return;
+            }
+
+            try {
+                const letterId = Number(button.dataset.letterId);
+                await requestJson(`/letters/${letterId}/read`, {
+                    method: "POST",
+                    body: JSON.stringify({ user_id: currentUser.id }),
+                });
+                await loadMailbox();
+                setStatus(`Письмо #${letterId} отмечено как прочитанное.`, "ok");
+            } catch (error) {
+                setStatus(`Не удалось отметить письмо как прочитанное: ${error.message}`, "error");
+            }
+        });
+
+        setAuthMode("login");
+        showAuthView();
+    </script>
+</body>
+</html>

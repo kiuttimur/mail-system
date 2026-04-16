@@ -1,3 +1,5 @@
+"""Эндпоинты отправки и чтения писем внутри почтового сервиса."""
+
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,6 +16,7 @@ router = APIRouter(prefix="/letters", tags=["letters"])
 
 
 def _ensure_user_exists(db: Session, user_id: int, name: str):
+    # Используем общий хелпер, чтобы sender/recipient проверялись одинаково.
     if not db.get(User, user_id):
         raise HTTPException(status_code=404, detail=f"{name} user not found")
 
@@ -60,6 +63,8 @@ def inbox(
 ):
     _ensure_user_exists(db, user_id, "recipient")
 
+    # unread_only управляет только фильтром, а сортировку и пагинацию
+    # сохраняем одинаковыми для всех вариантов выборки.
     cond = [Letter.recipient_id == user_id]
     if unread_only:
         cond.append(Letter.is_read.is_(False))
@@ -103,6 +108,7 @@ def mark_read(letter_id: int, payload: MarkReadRequest, db: Session = Depends(ge
         raise HTTPException(status_code=403, detail="only recipient can mark as read")
 
     if not letter.is_read:
+        # Повторная отметка "прочитано" не должна менять данные лишний раз.
         letter.is_read = True
         letter.read_at = datetime.now(timezone.utc)
         db.add(letter)

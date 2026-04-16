@@ -1,3 +1,5 @@
+"""SQLAlchemy-модель письма между двумя пользователями."""
+
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
@@ -24,5 +26,6 @@ class Letter(Base):
         nullable=False,
     )
 
+    # read_at заполняется только в момент явной отметки письма как прочитанного.
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

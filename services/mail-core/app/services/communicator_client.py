@@ -1,3 +1,5 @@
+"""Best-effort HTTP-клиент для вызова второго микросервиса communicator."""
+
 import httpx
 
 from app.core.config import settings
@@ -11,6 +13,7 @@ async def notify_new_letter(letter_id: int, recipient_id: int, subject: str) -> 
     if not settings.communicator_url:
         return
 
+    # У communicator свой отдельный API-контракт для события нового письма.
     url = settings.communicator_url.rstrip("/") + "/notify/new-letter"
     payload = {
         "letter_id": letter_id,

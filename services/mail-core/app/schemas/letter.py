@@ -1,3 +1,5 @@
+"""Pydantic-схемы писем и команд над ними."""
+
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -23,4 +25,5 @@ class LetterOut(BaseModel):
 
 
 class MarkReadRequest(BaseModel):
-    user_id: int  # кто отмечает (должен быть recipient)
+    # Кто именно пытается отметить письмо прочитанным.
+    user_id: int
