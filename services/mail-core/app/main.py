@@ -16,8 +16,3 @@ def health():
     return {"status": "ok"}
 
 
-@app.on_event("startup")
-def on_startup():
-    # Для ЛР2: быстро и просто, без миграций.
-    # Потом можно заменить на Alembic.
-    Base.metadata.create_all(bind=engine)
