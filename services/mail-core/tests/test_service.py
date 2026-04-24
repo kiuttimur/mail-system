@@ -3,18 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
 
 from app.api.auth import login
 from app.api.letters import get_letter, inbox, mark_read, send_letter, sent
-from app.api.users import create_user, get_user, get_user_by_username, list_users
+from app.api.users import (
+    confirm_telegram_link,
+    create_user,
+    get_user,
+    get_user_telegram_contact,
+    get_user_by_username,
+    list_users,
+    start_telegram_link,
+)
+from app.core.config import settings
 from app.core.security import verify_password
 from app.main import app, health
 from app.models.user import User
 from app.schemas.letter import LetterCreate, MarkReadRequest
-from app.schemas.user import UserCreate, UserLogin
+from app.schemas.user import (
+    TelegramLinkConfirm,
+    TelegramLinkStartRequest,
+    UserCreate,
+    UserLogin,
+)
 from app.ui import web_app
 
 TEST_PASSWORD = "password123"
@@ -140,6 +155,182 @@ def test_login_raises_401_for_invalid_password(db_session) -> None:
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "invalid username or password"
+
+
+def test_start_telegram_link_returns_token_and_deep_link(db_session, monkeypatch) -> None:
+    # Проверяем старт привязки Telegram:
+    # при правильном пароле сервис должен выдать одноразовый токен
+    # и deep-link для будущего Telegram-бота.
+    monkeypatch.setattr(settings, "telegram_bot_username", "mail_system_test_bot")
+    user = create_test_user(db_session, "alice")
+
+    result = start_telegram_link(
+        user.id,
+        TelegramLinkStartRequest(password=TEST_PASSWORD),
+        db_session,
+    )
+    stored_user = db_session.get(User, user.id)
+
+    assert stored_user is not None
+    assert result.link_token
+    assert stored_user.telegram_link_token == result.link_token
+    assert stored_user.telegram_link_token_created_at is not None
+    assert result.telegram_bot_username == "mail_system_test_bot"
+    assert result.telegram_deep_link == f"https://t.me/mail_system_test_bot?start={result.link_token}"
+
+
+def test_start_telegram_link_rejects_invalid_password(db_session) -> None:
+    # Проверяем защиту старта привязки:
+    # без подтверждения паролем нельзя выпустить токен для Telegram.
+    user = create_test_user(db_session, "alice")
+
+    with pytest.raises(HTTPException) as exc_info:
+        start_telegram_link(
+            user.id,
+            TelegramLinkStartRequest(password="wrongpass123"),
+            db_session,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "invalid password"
+
+
+def test_confirm_telegram_link_binds_chat_and_clears_token(db_session) -> None:
+    # Проверяем успешное подтверждение Telegram:
+    # подтверждённый chat_id и username сохраняются в профиле,
+    # а одноразовый токен после использования очищается.
+    user = create_test_user(db_session, "alice")
+    start_result = start_telegram_link(
+        user.id,
+        TelegramLinkStartRequest(password=TEST_PASSWORD),
+        db_session,
+    )
+
+    linked_user = confirm_telegram_link(
+        TelegramLinkConfirm(
+            token=start_result.link_token,
+            chat_id="chat-1001",
+            telegram_username="alice_mail",
+        ),
+        db_session,
+    )
+    stored_user = db_session.get(User, user.id)
+
+    assert stored_user is not None
+    assert linked_user.telegram_username == "alice_mail"
+    assert linked_user.telegram_verified_at is not None
+    assert stored_user.telegram_chat_id == "chat-1001"
+    assert stored_user.telegram_link_token is None
+    assert stored_user.telegram_link_token_created_at is None
+
+
+def test_get_user_telegram_contact_returns_linked_chat_data(db_session) -> None:
+    # Проверяем внутренний endpoint для communicator:
+    # после подтверждения привязки сервис должен отдать chat_id и метаданные Telegram.
+    user = create_test_user(db_session, "alice")
+    start_result = start_telegram_link(
+        user.id,
+        TelegramLinkStartRequest(password=TEST_PASSWORD),
+        db_session,
+    )
+    confirm_telegram_link(
+        TelegramLinkConfirm(
+            token=start_result.link_token,
+            chat_id="chat-5555",
+            telegram_username="alice_mail",
+        ),
+        db_session,
+    )
+
+    contact = get_user_telegram_contact(user.id, db_session)
+
+    assert contact.user_id == user.id
+    assert contact.telegram_chat_id == "chat-5555"
+    assert contact.telegram_username == "alice_mail"
+    assert contact.telegram_verified_at is not None
+
+
+def test_confirm_telegram_link_rejects_expired_token(db_session, monkeypatch) -> None:
+    # Проверяем срок жизни токена:
+    # если Telegram подтвердил ссылку слишком поздно, токен должен
+    # стать недействительным и больше не оставаться в профиле.
+    monkeypatch.setattr(settings, "telegram_link_token_ttl_minutes", 15)
+    user = create_test_user(db_session, "alice")
+    start_result = start_telegram_link(
+        user.id,
+        TelegramLinkStartRequest(password=TEST_PASSWORD),
+        db_session,
+    )
+
+    stored_user = db_session.get(User, user.id)
+    assert stored_user is not None
+    stored_user.telegram_link_token_created_at = datetime.now(timezone.utc) - timedelta(
+        minutes=settings.telegram_link_token_ttl_minutes + 1
+    )
+    db_session.add(stored_user)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_telegram_link(
+            TelegramLinkConfirm(
+                token=start_result.link_token,
+                chat_id="chat-2002",
+                telegram_username="alice_mail",
+            ),
+            db_session,
+        )
+
+    expired_user = db_session.get(User, user.id)
+    assert expired_user is not None
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "telegram link token expired"
+    assert expired_user.telegram_link_token is None
+    assert expired_user.telegram_link_token_created_at is None
+
+
+def test_confirm_telegram_link_allows_same_chat_id_for_multiple_accounts(db_session) -> None:
+    # Проверяем новое правило привязки:
+    # один и тот же Telegram chat_id можно использовать для нескольких аккаунтов
+    # одного и того же пользователя.
+    alice = create_test_user(db_session, "alice")
+    bob = create_test_user(db_session, "bob")
+
+    alice_link = start_telegram_link(
+        alice.id,
+        TelegramLinkStartRequest(password=TEST_PASSWORD),
+        db_session,
+    )
+    bob_link = start_telegram_link(
+        bob.id,
+        TelegramLinkStartRequest(password=TEST_PASSWORD),
+        db_session,
+    )
+
+    confirm_telegram_link(
+        TelegramLinkConfirm(
+            token=alice_link.link_token,
+            chat_id="chat-3003",
+            telegram_username="alice_mail",
+        ),
+        db_session,
+    )
+
+    linked_bob = confirm_telegram_link(
+        TelegramLinkConfirm(
+            token=bob_link.link_token,
+            chat_id="chat-3003",
+            telegram_username="bob_mail",
+        ),
+        db_session,
+    )
+    alice_user = db_session.get(User, alice.id)
+    bob_user = db_session.get(User, bob.id)
+
+    assert alice_user is not None
+    assert bob_user is not None
+    assert linked_bob.id == bob.id
+    assert alice_user.telegram_chat_id == "chat-3003"
+    assert bob_user.telegram_chat_id == "chat-3003"
 
 
 def test_send_letter_and_read_mailboxes(db_session) -> None:

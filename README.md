@@ -1,210 +1,145 @@
 # mail-system
 
-Учебный проект с двумя микросервисами для "почтового" общения по REST API.
-В текущей итерации основной фокус на `services/mail-core`.
+Учебная монорепа с двумя Python-микросервисами для "почтового" общения по REST API.
+Это не realtime-мессенджер: здесь есть пользователи, письма с темой и текстом, входящие, отправленные и отметка "прочитано".
 
-## Структура
+**Сервисы**
+- `services/mail-core` — основной backend: пользователи, письма, веб-форма, REST API, миграции.
+- `services/communicator` — сервис уведомлений: принимает событие о новом письме, логирует его и при настройке отправляет уведомление в Telegram.
 
-- `services/mail-core` - основной сервис: пользователи, письма, REST API, Swagger, Alembic-миграции
-- `services/communicator` - второй сервис под уведомления/логирование, будет развиваться отдельно
+## Что Уже Умеет Проект
 
-## Что Это За Сервис
+- регистрация и вход по логину/паролю;
+- хранение пароля только в виде `password_hash`;
+- отправка и чтение писем;
+- разделение входящих на прочитанные и непрочитанные;
+- привязка Telegram через одноразовый token;
+- уведомление о новом письме через `communicator`;
+- Swagger UI у обоих сервисов;
+- Alembic-миграции для `mail-core`;
+- idempotent `seed.py` с тестовыми пользователями и письмами;
+- тесты для `mail-core` и `communicator`.
 
-`mail-core` - это основной backend почтовой системы.
-Он не работает как realtime-чат: здесь есть пользователи, письма с темой и текстом, входящие, отправленные и отметка "прочитано".
+## Структура Репозитория
 
-Сервис умеет:
-
-- регистрировать пользователя с логином и паролем;
-- хранить пароль не в открытом виде, а как `password_hash`;
-- логинить пользователя по логину и паролю;
-- отправлять письма от одного пользователя другому;
-- показывать входящие и отправленные письма;
-- отмечать письмо как прочитанное;
-- после отправки письма best-effort вызывать второй сервис communicator, если задан `COMMUNICATOR_URL`.
-
-## Как Устроен mail-core
-
-Внутри `services/mail-core/app` код разделён по слоям:
-
-- `main.py` - точка входа FastAPI, здесь собирается всё приложение;
-- `api/` - HTTP-эндпоинты;
-- `core/` - конфиг, подключение к БД и функции безопасности;
-- `models/` - SQLAlchemy-модели таблиц;
-- `schemas/` - Pydantic-схемы входных и выходных данных;
-- `services/` - вспомогательные сервисы, например клиент communicator;
-- `templates/index.html` - простая веб-форма поверх REST API;
-- `ui.py` - роут `/`, который отдаёт эту HTML-страницу.
-
-Отдельно от приложения:
-
-- `alembic/` и `alembic.ini` - миграции базы данных;
-- `seed.py` - заполнение dev-базы тестовыми пользователями и письмами;
-- `tests/` - тесты на основную логику сервиса.
-
-## Как Всё Работает По Шагам
-
-### Регистрация
-
-1. Веб-форма или клиент отправляет `POST /users`.
-2. FastAPI валидирует тело запроса через Pydantic-схему.
-3. Сервис проверяет, что `username` ещё не занят.
-4. Пароль хешируется.
-5. В таблицу `users` сохраняются `username`, `password_hash`, `created_at`.
-
-### Вход
-
-1. Клиент отправляет `POST /auth/login`.
-2. Сервис ищет пользователя по `username`.
-3. Введённый пароль сравнивается с `password_hash`.
-4. Если всё верно, сервис возвращает данные пользователя.
-
-### Отправка письма
-
-1. Клиент отправляет `POST /letters`.
-2. Сервис проверяет, что отправитель и получатель существуют.
-3. Проверяется, что пользователь не отправляет письмо самому себе.
-4. Письмо сохраняется в таблицу `letters`.
-5. После сохранения сервис пытается вызвать communicator, если он настроен.
-
-### Чтение писем
-
-- `GET /letters/inbox/{user_id}` - входящие письма пользователя;
-- `GET /letters/sent/{user_id}` - отправленные письма пользователя;
-- `POST /letters/{letter_id}/read` - отметить письмо как прочитанное.
-
-### Как связаны модели, схемы и миграции
-
-- `models/` описывают таблицы на уровне Python-кода;
-- `schemas/` описывают, какие данные приходят в API и какие уходят из API;
-- `alembic/versions/` описывают, как реально создать или изменить таблицы в базе;
-- `seed.py` не создаёт схему БД, а только наполняет уже мигрированную базу тестовыми данными.
-
-## Быстрый старт mail-core
-
-Ниже самый понятный сценарий для локального запуска.
-
-### 1. Подготовить окружение
-
-```bash
-cd services/mail-core
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
+```text
+mail-system/
+├── docker-compose.yml
+├── README.md
+└── services/
+    ├── communicator/
+    │   ├── app/
+    │   ├── Dockerfile
+    │   ├── requirements.txt
+    │   └── tests/
+    └── mail-core/
+        ├── alembic/
+        ├── app/
+        ├── Dockerfile
+        ├── requirements.txt
+        ├── seed.py
+        └── tests/
 ```
 
-`DATABASE_URL` по умолчанию указывает на локальный SQLite-файл `mail_core.db`.
-`.env` в git не коммитится, в репозитории хранится только `.env.example`.
-Новые пользователи создаются только с паролем, а в базе хранится не сам пароль, а `password_hash`.
+## Как Устроены Сервисы
 
-### 2. Прогнать миграции
+**mail-core**
+- `app/main.py` — собирает FastAPI-приложение.
+- `app/api/` — REST-роуты пользователей, писем и входа.
+- `app/core/` — конфиг, БД, безопасность.
+- `app/models/` — SQLAlchemy-модели `users` и `letters`.
+- `app/schemas/` — Pydantic-схемы запросов и ответов.
+- `app/services/communicator_client.py` — best-effort вызов второго сервиса.
+- `app/templates/index.html` и `app/ui.py` — простая веб-форма поверх API.
+- `alembic/` — миграции БД.
 
-```bash
-cd services/mail-core
-source .venv/bin/activate
-alembic upgrade head
-```
+**communicator**
+- `app/main.py` — FastAPI-приложение.
+- `app/api/notifications.py` — принимает событие `new-letter` от `mail-core`.
+- `app/api/telegram.py` — принимает Telegram webhook и завершает привязку.
+- `app/services/mail_core_client.py` — ходит в `mail-core` за контактами и подтверждением привязки.
+- `app/services/telegram_client.py` — отправляет сообщения через Telegram Bot API.
 
-### Если Alembic падает с ошибкой `table users already exists`
+## Как Работает Сценарий С Письмом
 
-Это означает, что SQLite-база уже существует, а таблицы `users` и `letters` были созданы раньше без Alembic.
-Сейчас в проекте уже есть миграция `0002`, которая добавляет `password_hash`, поэтому просто делать `alembic stamp head` для старой базы больше нельзя.
+1. Пользователь отправляет письмо в `mail-core`.
+2. `mail-core` валидирует sender/recipient, сохраняет письмо в БД и возвращает ответ.
+3. После сохранения `mail-core` best-effort вызывает `communicator` по `POST /notify/new-letter`.
+4. `communicator` всегда пишет событие в консоль.
+5. Если у получателя есть привязанный Telegram, `communicator` отправляет уведомление в Telegram Bot API.
 
-Есть 3 нормальных сценария:
+## Как Работает Привязка Telegram
 
-1. Чистый старт с новой локальной БД:
+1. Пользователь входит в аккаунт и нажимает `Привязать Telegram`.
+2. `mail-core` просит повторно ввести пароль и создаёт одноразовый token.
+3. UI показывает deep-link вида `https://t.me/<bot>?start=<token>`.
+4. Пользователь открывает бота и нажимает `Start`.
+5. Telegram отправляет webhook в `communicator`.
+6. `communicator` извлекает token и вызывает `POST /users/telegram/confirm` в `mail-core`.
+7. `mail-core` сохраняет `telegram_chat_id`, `telegram_username` и время подтверждения.
 
-```bash
-cd services/mail-core
-rm -f mail_core.db
-alembic upgrade head
-```
+Важно:
+- пользователь не вводит чужой `@username` вручную;
+- один и тот же Telegram чат можно привязать к нескольким аккаунтам;
+- token одноразовый и живёт ограниченное время.
 
-2. Сохранить текущую БД и просто пометить схему как уже применённую:
+## Docker Compose
 
-```bash
-cd services/mail-core
-alembic stamp 0001_initial
-alembic upgrade head
-```
-
-Этот сценарий нужен для старой базы, где таблицы уже есть, но колонки `password_hash` ещё нет.
-После `alembic upgrade head` она будет добавлена.
-Для уже существующих пользователей временный пароль после этой миграции: `password123`.
-
-3. Вообще не трогать текущий `mail_core.db`, а использовать отдельную dev-базу:
-
-В файле `.env` поменяйте строку:
-
-```env
-DATABASE_URL=sqlite:///./mail_core_dev.db
-```
-
-После этого выполни:
+Можно поднять всё одной командой:
 
 ```bash
-cd services/mail-core
-alembic upgrade head
+docker compose up --build
 ```
 
-Для обычной локальной разработки проще всего использовать вариант 1 или 3.
+Что делает compose:
+- собирает оба сервиса из `Dockerfile`;
+- запускает `mail-core` и `communicator` в одной сети;
+- автоматически прокидывает `mail-core -> communicator` и `communicator -> mail-core`;
+- хранит SQLite в volume `mail_core_data`;
+- при старте `mail-core` автоматически делает `alembic upgrade head`.
 
-### 3. Наполнить БД тестовыми данными
+После запуска будут доступны:
+- `mail-core`: `http://127.0.0.1:8001`
+- `communicator`: `http://127.0.0.1:8002`
+- `mail-core /docs`: `http://127.0.0.1:8001/docs`
+- `communicator /docs`: `http://127.0.0.1:8002/docs`
+
+Остановка:
 
 ```bash
-cd services/mail-core
-source .venv/bin/activate
-python seed.py
+docker compose down
 ```
 
-`seed.py` идемпотентный:
-
-- создаёт 100 пользователей: `alice`, `bob`, `user001` ... `user098`
-- создаёт 2 тестовых письма между `alice` и `bob`
-- задаёт для seed-пользователей пароль по умолчанию: `password123`
-- при повторном запуске не плодит дубликаты
-
-### 4. Запустить API
+Удалить ещё и данные volume:
 
 ```bash
-cd services/mail-core
-source .venv/bin/activate
-uvicorn app.main:app --reload --port 8001
+docker compose down -v
 ```
 
-### 5. Проверить, что всё работает
-
-- Веб-форма: `http://127.0.0.1:8001/`
-- Первым экраном откроются кнопки `Вход` и `Регистрация`
-- После авторизации откроется кабинет пользователя
-- Отправка письма идёт по логину получателя; если такого логина нет, форма покажет ошибку
-- Входящие письма разделены на `Непрочитанные` и `Прочитанные`
-- `GET http://127.0.0.1:8001/health`
-- Swagger UI: `http://127.0.0.1:8001/docs`
-- Вход: `POST /auth/login` с `username` и `password`
-- После `seed.py` можно проверить `/users`, `/letters/inbox/{user_id}` и `/letters/sent/{user_id}`
-
-## Коротко: команды для запуска с нуля
-
-Если нужен самый короткий путь для локального старта:
+Запустить seed внутри контейнера:
 
 ```bash
-cd services/mail-core
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-rm -f mail_core.db
-alembic upgrade head
-python seed.py
-uvicorn app.main:app --reload --port 8001
+docker compose exec mail-core python seed.py
 ```
 
 ## Тесты
+
+`mail-core`
 
 ```bash
 cd services/mail-core
 source .venv/bin/activate
 python -m pytest tests -q
 ```
+
+`communicator`
+
+```bash
+cd services/communicator
+source .venv/bin/activate
+python -m pytest tests -q
+```
+
+## Замечание
+- Если бот пишет `telegram link token not found`, значит token уже истёк, был заменён новым или уже использован.
+

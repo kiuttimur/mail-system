@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Простой UI: сначала авторизация, затем кабинет пользователя с письмами. -->
+<!-- Простой UI: сначала авторизация, затем кабинет пользователя с письмами и привязкой Telegram. -->
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -307,8 +307,8 @@
             <h1>Mail Core Web</h1>
             <p>
                 Сначала пользователь входит или регистрируется, а затем попадает в свой кабинет:
-                отправляет письма по логину получателя и отдельно смотрит непрочитанные,
-                прочитанные и отправленные письма.
+                отправляет письма по логину получателя, отдельно смотрит непрочитанные,
+                прочитанные и отправленные письма, а также может запустить безопасную привязку Telegram.
             </p>
             <div class="hero-links">
                 <a href="/docs" target="_blank" rel="noreferrer">Swagger /docs</a>
@@ -364,6 +364,35 @@
                     <div class="session-panel">
                         <strong id="current-user-label">Пользователь не выбран</strong>
                         <div class="meta" id="current-user-meta">Войди или зарегистрируйся, чтобы увидеть данные аккаунта.</div>
+                    </div>
+                    <div class="session-panel">
+                        <strong>Telegram</strong>
+                        <div class="meta" id="telegram-status">Telegram пока не привязан.</div>
+                        <div class="meta" id="telegram-help">
+                            После входа можно выпустить одноразовый токен и открыть Telegram-бота по deep-link.
+                        </div>
+                    </div>
+                    <form id="telegram-link-form" class="form-grid">
+                        <label>
+                            Пароль текущего аккаунта
+                            <input
+                                id="telegram-link-password"
+                                type="password"
+                                minlength="8"
+                                maxlength="128"
+                                placeholder="подтверди пароль для привязки"
+                                required
+                            >
+                        </label>
+                        <div class="actions">
+                            <button type="submit">Привязать Telegram</button>
+                        </div>
+                    </form>
+                    <div id="telegram-link-result" class="session-panel" hidden>
+                        <strong>Как завершить привязку</strong>
+                        <div class="meta" id="telegram-link-expires"></div>
+                        <div class="meta" id="telegram-link-deep-link"></div>
+                        <div class="meta" id="telegram-link-token"></div>
                     </div>
                     <div class="actions">
                         <button type="button" class="secondary" id="refresh-mailbox-button">Обновить письма</button>
@@ -429,6 +458,14 @@
 
         const currentUserLabel = document.getElementById("current-user-label");
         const currentUserMeta = document.getElementById("current-user-meta");
+        const telegramStatus = document.getElementById("telegram-status");
+        const telegramHelp = document.getElementById("telegram-help");
+        const telegramLinkForm = document.getElementById("telegram-link-form");
+        const telegramLinkPassword = document.getElementById("telegram-link-password");
+        const telegramLinkResult = document.getElementById("telegram-link-result");
+        const telegramLinkExpires = document.getElementById("telegram-link-expires");
+        const telegramLinkDeepLink = document.getElementById("telegram-link-deep-link");
+        const telegramLinkToken = document.getElementById("telegram-link-token");
         const refreshMailboxButton = document.getElementById("refresh-mailbox-button");
         const logoutButton = document.getElementById("logout-button");
         const sendLetterForm = document.getElementById("send-letter-form");
@@ -500,15 +537,48 @@
             dashboard.hidden = true;
         }
 
+        function resetTelegramLinkResult() {
+            telegramLinkForm.reset();
+            telegramLinkResult.hidden = true;
+            telegramLinkExpires.textContent = "";
+            telegramLinkDeepLink.textContent = "";
+            telegramLinkToken.textContent = "";
+        }
+
         function renderCurrentUser() {
             if (!currentUser) {
                 currentUserLabel.textContent = "Пользователь не выбран";
                 currentUserMeta.textContent = "Войди или зарегистрируйся, чтобы увидеть данные аккаунта.";
+                telegramStatus.textContent = "Telegram пока не привязан.";
+                telegramHelp.textContent = "После входа можно выпустить одноразовый токен и открыть Telegram-бота по deep-link.";
                 return;
             }
 
             currentUserLabel.textContent = `${currentUser.username} (id ${currentUser.id})`;
             currentUserMeta.textContent = `Аккаунт создан: ${new Date(currentUser.created_at).toLocaleString("ru-RU")}`;
+            if (currentUser.telegram_username || currentUser.telegram_verified_at) {
+                const telegramName = currentUser.telegram_username
+                    ? `@${currentUser.telegram_username}`
+                    : "без username";
+                telegramStatus.textContent = `Telegram привязан: ${telegramName}.`;
+                telegramHelp.textContent = currentUser.telegram_verified_at
+                    ? `Привязка подтверждена: ${new Date(currentUser.telegram_verified_at).toLocaleString("ru-RU")}. При необходимости можно выпустить новый токен и перепривязать аккаунт.`
+                    : "Telegram подтверждён без username.";
+                return;
+            }
+
+            telegramStatus.textContent = "Telegram ещё не привязан.";
+            telegramHelp.textContent = "Для безопасной привязки введи пароль текущего аккаунта. Сервис создаст одноразовый токен для Telegram-бота.";
+        }
+
+        async function refreshCurrentUser() {
+            if (!currentUser) {
+                return null;
+            }
+
+            currentUser = await requestJson(`/users/${currentUser.id}`);
+            renderCurrentUser();
+            return currentUser;
         }
 
         function renderLetterList(target, emptyTarget, letters, mode) {
@@ -578,6 +648,7 @@
             currentUser = user;
             renderCurrentUser();
             showDashboard();
+            resetTelegramLinkResult();
             await loadMailbox();
             setStatus(message, "ok");
         }
@@ -626,6 +697,42 @@
             }
         });
 
+        telegramLinkForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            if (!currentUser) {
+                setStatus("Сначала нужно войти в аккаунт.", "error");
+                return;
+            }
+
+            try {
+                const result = await requestJson(`/users/${currentUser.id}/telegram/link`, {
+                    method: "POST",
+                    body: JSON.stringify({ password: telegramLinkPassword.value }),
+                });
+
+                telegramLinkForm.reset();
+                telegramLinkResult.hidden = false;
+                telegramLinkExpires.textContent = `Ссылка действует до: ${new Date(result.expires_at).toLocaleString("ru-RU")}.`;
+
+                if (result.telegram_deep_link) {
+                    telegramLinkDeepLink.innerHTML = `
+                        Открой Telegram-бота и нажми Start:
+                        <a href="${escapeHtml(result.telegram_deep_link)}" target="_blank" rel="noreferrer">
+                            ${escapeHtml(result.telegram_deep_link)}
+                        </a>
+                    `;
+                } else {
+                    telegramLinkDeepLink.textContent = "Deep-link пока недоступен: добавь TELEGRAM_BOT_USERNAME в .env, чтобы сразу открывать бота по ссылке.";
+                }
+
+                telegramLinkToken.textContent = `Если бот ещё не подключён, используй этот токен при команде /start: ${result.link_token}`;
+                setStatus("Токен для привязки Telegram создан. Следующий шаг должен подтвердить Telegram-бот.", "ok");
+            } catch (error) {
+                setStatus(`Не удалось запустить привязку Telegram: ${error.message}`, "error");
+            }
+        });
+
         sendLetterForm.addEventListener("submit", async (event) => {
             event.preventDefault();
 
@@ -660,8 +767,9 @@
 
         refreshMailboxButton.addEventListener("click", async () => {
             try {
+                await refreshCurrentUser();
                 await loadMailbox();
-                setStatus("Почтовый ящик обновлён.", "ok");
+                setStatus("Почтовый ящик и данные аккаунта обновлены.", "ok");
             } catch (error) {
                 setStatus(`Не удалось обновить письма: ${error.message}`, "error");
             }
@@ -670,6 +778,7 @@
         logoutButton.addEventListener("click", () => {
             currentUser = null;
             renderCurrentUser();
+            resetTelegramLinkResult();
             showAuthView();
             setAuthMode("login");
             unreadLettersList.innerHTML = "";

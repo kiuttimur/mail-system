@@ -1,0 +1,40 @@
+#
+# Локальный compose для двух сервисов:
+# - mail-core хранит письма и пользователей
+# - communicator принимает события и общается с Telegram Bot API
+#
+services:
+  mail-core:
+    build:
+      context: ./services/mail-core
+    container_name: mail-core
+    env_file:
+      - ./services/mail-core/.env
+    environment:
+      # В контейнере SQLite лежит не в каталоге проекта, а в отдельном volume.
+      DATABASE_URL: sqlite:////data/mail_core.db
+      # Внутри docker-сети сервисы обращаются друг к другу по имени контейнера.
+      COMMUNICATOR_URL: http://communicator:8002
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8001"
+    ports:
+      - "8001:8001"
+    volumes:
+      - mail_core_data:/data
+
+  communicator:
+    build:
+      context: ./services/communicator
+    container_name: communicator
+    env_file:
+      - ./services/communicator/.env
+    environment:
+      # communicator ходит в mail-core по внутреннему имени сервиса.
+      MAIL_CORE_URL: http://mail-core:8001
+    ports:
+      - "8002:8002"
+
+volumes:
+  # Отдельный volume нужен, чтобы SQLite не исчезала при пересоздании контейнера.
+  mail_core_data:

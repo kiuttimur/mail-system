@@ -12,6 +12,8 @@ class Settings(BaseSettings):
 
     communicator_url: str | None = None
     communicator_timeout_seconds: float = 2.0
+    telegram_bot_username: str | None = None
+    telegram_link_token_ttl_minutes: int = 15
 
 
 settings = Settings()
