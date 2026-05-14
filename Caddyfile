@@ -1,0 +1,13 @@
+{$CADDY_HOST:localhost} {
+    encode zstd gzip
+
+    # Telegram webhook должен попадать в communicator как есть.
+    handle /telegram/* {
+        reverse_proxy communicator:8002
+    }
+
+    # Всё остальное обслуживает основной mail-core сервис.
+    handle {
+        reverse_proxy mail-core:8001
+    }
+}

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -15,6 +16,11 @@ if str(SERVICE_ROOT) not in sys.path:
     sys.path.append(str(SERVICE_ROOT))
 
 from app.models.base import Base
+from app.models.letter import Letter  # noqa: F401
+from app.models.user import User  # noqa: F401
+from app.models.user_session import UserSession  # noqa: F401
+from app.core.db import get_db
+from app.main import app
 
 
 @pytest.fixture()
@@ -43,3 +49,16 @@ def disable_communicator(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr("app.api.letters.notify_new_letter", noop_notify_new_letter)
+
+
+@pytest.fixture()
+def client(db_session: Session):
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+    app.dependency_overrides.clear()

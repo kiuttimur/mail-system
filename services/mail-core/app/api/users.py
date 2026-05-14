@@ -7,15 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.core.config import settings
-from app.core.security import hash_password, verify_password
+from app.core.security import hash_password
 from app.core.db import get_db
 from app.models.user import User
 from app.schemas.user import (
     TelegramContactOut,
     TelegramLinkConfirm,
     TelegramLinkStartOut,
-    TelegramLinkStartRequest,
     UserCreate,
     UserOut,
 )
@@ -55,6 +55,11 @@ def _telegram_token_expired(user: User) -> bool:
     return datetime.now(timezone.utc) > expires_at
 
 
+def _ensure_same_user(requested_user_id: int, current_user: User) -> None:
+    if requested_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="forbidden for another user")
+
+
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     # Проверяем уникальность логина до вставки, чтобы вернуть понятную 409.
@@ -74,7 +79,10 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[UserOut])
-def list_users(db: Session = Depends(get_db)):
+def list_users(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     users = db.scalars(select(User).order_by(User.id.asc())).all()
     return list(users)
 
@@ -82,16 +90,13 @@ def list_users(db: Session = Depends(get_db)):
 @router.post("/{user_id}/telegram/link", response_model=TelegramLinkStartOut)
 def start_telegram_link(
     user_id: int,
-    payload: TelegramLinkStartRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _ensure_same_user(user_id, current_user)
     user = _get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="user not found")
-
-    # Так как в проекте пока нет серверных сессий, подтверждаем владение аккаунтом паролем.
-    if not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="invalid password")
 
     link_token = secrets.token_urlsafe(24)
     created_at = datetime.now(timezone.utc)
@@ -155,7 +160,11 @@ def get_user_telegram_contact(user_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/by-username/{username}", response_model=UserOut)
-def get_user_by_username(username: str, db: Session = Depends(get_db)):
+def get_user_by_username(
+    username: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     # Этот lookup нужен веб-форме, где письмо отправляется по логину получателя.
     user = _get_user_by_username(db, username)
     if not user:
@@ -164,7 +173,12 @@ def get_user_by_username(username: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{user_id}", response_model=UserOut)
-def get_user(user_id: int, db: Session = Depends(get_db)):
+def get_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _ensure_same_user(user_id, current_user)
     user = _get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="user not found")

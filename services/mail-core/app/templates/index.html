@@ -373,17 +373,6 @@
                         </div>
                     </div>
                     <form id="telegram-link-form" class="form-grid">
-                        <label>
-                            Пароль текущего аккаунта
-                            <input
-                                id="telegram-link-password"
-                                type="password"
-                                minlength="8"
-                                maxlength="128"
-                                placeholder="подтверди пароль для привязки"
-                                required
-                            >
-                        </label>
                         <div class="actions">
                             <button type="submit">Привязать Telegram</button>
                         </div>
@@ -461,7 +450,6 @@
         const telegramStatus = document.getElementById("telegram-status");
         const telegramHelp = document.getElementById("telegram-help");
         const telegramLinkForm = document.getElementById("telegram-link-form");
-        const telegramLinkPassword = document.getElementById("telegram-link-password");
         const telegramLinkResult = document.getElementById("telegram-link-result");
         const telegramLinkExpires = document.getElementById("telegram-link-expires");
         const telegramLinkDeepLink = document.getElementById("telegram-link-deep-link");
@@ -495,6 +483,7 @@
 
         async function requestJson(url, options = {}) {
             const response = await fetch(url, {
+                credentials: "same-origin",
                 headers: { "Content-Type": "application/json", ...(options.headers || {}) },
                 ...options,
             });
@@ -568,7 +557,7 @@
             }
 
             telegramStatus.textContent = "Telegram ещё не привязан.";
-            telegramHelp.textContent = "Для безопасной привязки введи пароль текущего аккаунта. Сервис создаст одноразовый токен для Telegram-бота.";
+            telegramHelp.textContent = "Для привязки достаточно активной сессии: сервис создаст одноразовый токен для Telegram-бота.";
         }
 
         async function refreshCurrentUser() {
@@ -576,7 +565,7 @@
                 return null;
             }
 
-            currentUser = await requestJson(`/users/${currentUser.id}`);
+            currentUser = await requestJson("/auth/me");
             renderCurrentUser();
             return currentUser;
         }
@@ -690,8 +679,12 @@
                     method: "POST",
                     body: JSON.stringify({ username, password }),
                 });
+                const authUser = await requestJson("/auth/login", {
+                    method: "POST",
+                    body: JSON.stringify({ username, password }),
+                });
                 registerForm.reset();
-                await enterAccount(user, `Аккаунт ${user.username} создан, вход выполнен автоматически.`);
+                await enterAccount(authUser, `Аккаунт ${user.username} создан, вход выполнен автоматически.`);
             } catch (error) {
                 setStatus(`Не удалось зарегистрироваться: ${error.message}`, "error");
             }
@@ -708,7 +701,6 @@
             try {
                 const result = await requestJson(`/users/${currentUser.id}/telegram/link`, {
                     method: "POST",
-                    body: JSON.stringify({ password: telegramLinkPassword.value }),
                 });
 
                 telegramLinkForm.reset();
@@ -775,7 +767,14 @@
             }
         });
 
-        logoutButton.addEventListener("click", () => {
+        logoutButton.addEventListener("click", async () => {
+            try {
+                await requestJson("/auth/logout", {
+                    method: "POST",
+                });
+            } catch (_error) {
+            }
+
             currentUser = null;
             renderCurrentUser();
             resetTelegramLinkResult();
@@ -809,8 +808,18 @@
             }
         });
 
-        setAuthMode("login");
-        showAuthView();
+        async function bootstrapSession() {
+            setAuthMode("login");
+            showAuthView();
+
+            try {
+                const user = await requestJson("/auth/me");
+                await enterAccount(user, `Сессия восстановлена: ${user.username}.`);
+            } catch (_error) {
+            }
+        }
+
+        bootstrapSession();
     </script>
 </body>
 </html>

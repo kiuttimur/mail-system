@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, desc, select
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.core.db import get_db
 from app.models.letter import Letter
 from app.models.user import User
@@ -21,8 +22,20 @@ def _ensure_user_exists(db: Session, user_id: int, name: str):
         raise HTTPException(status_code=404, detail=f"{name} user not found")
 
 
+def _ensure_same_user(requested_user_id: int, current_user: User) -> None:
+    if requested_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="forbidden for another user")
+
+
 @router.post("", response_model=LetterOut, status_code=status.HTTP_201_CREATED)
-async def send_letter(payload: LetterCreate, db: Session = Depends(get_db)):
+async def send_letter(
+    payload: LetterCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if payload.sender_id != current_user.id:
+        raise HTTPException(status_code=403, detail="sender_id must match current user")
+
     if payload.sender_id == payload.recipient_id:
         raise HTTPException(status_code=400, detail="sender_id cannot equal recipient_id")
 
@@ -46,10 +59,16 @@ async def send_letter(payload: LetterCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{letter_id}", response_model=LetterOut)
-def get_letter(letter_id: int, db: Session = Depends(get_db)):
+def get_letter(
+    letter_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     letter = db.get(Letter, letter_id)
     if not letter:
         raise HTTPException(status_code=404, detail="letter not found")
+    if current_user.id not in {letter.sender_id, letter.recipient_id}:
+        raise HTTPException(status_code=403, detail="forbidden for this letter")
     return letter
 
 
@@ -59,8 +78,10 @@ def inbox(
     unread_only: bool = Query(False),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _ensure_same_user(user_id, current_user)
     _ensure_user_exists(db, user_id, "recipient")
 
     # unread_only управляет только фильтром, а сортировку и пагинацию
@@ -84,8 +105,10 @@ def sent(
     user_id: int,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _ensure_same_user(user_id, current_user)
     _ensure_user_exists(db, user_id, "sender")
 
     letters = db.scalars(
@@ -99,12 +122,20 @@ def sent(
 
 
 @router.post("/{letter_id}/read", response_model=LetterOut)
-def mark_read(letter_id: int, payload: MarkReadRequest, db: Session = Depends(get_db)):
+def mark_read(
+    letter_id: int,
+    payload: MarkReadRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     letter = db.get(Letter, letter_id)
     if not letter:
         raise HTTPException(status_code=404, detail="letter not found")
 
-    if payload.user_id != letter.recipient_id:
+    if payload.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="user_id must match current user")
+
+    if current_user.id != letter.recipient_id:
         raise HTTPException(status_code=403, detail="only recipient can mark as read")
 
     if not letter.is_read:

@@ -1,0 +1,29 @@
+#
+# Дополнительный compose-слой для VPS:
+# - публикует только Caddy на 80/443
+# - mail-core и communicator остаются доступными по localhost на хосте
+#   и по внутренней docker-сети для самого Caddy
+#
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: caddy
+    restart: unless-stopped
+    environment:
+      # Для VPS укажи в корневом .env проекта:
+      # CADDY_HOST=your-domain.example
+      CADDY_HOST: ${CADDY_HOST:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - mail-core
+      - communicator
+
+volumes:
+  caddy_data:
+  caddy_config:

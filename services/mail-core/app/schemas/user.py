@@ -14,12 +14,6 @@ class UserLogin(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
-class TelegramLinkStartRequest(BaseModel):
-    # Пока в проекте нет cookie/JWT-сессий, поэтому чувствительное действие
-    # дополнительно подтверждается паролем текущего аккаунта.
-    password: str = Field(min_length=8, max_length=128)
-
-
 class TelegramLinkStartOut(BaseModel):
     # link_token нужен communicator/боту, а deep-link удобен UI.
     link_token: str

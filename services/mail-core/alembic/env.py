@@ -18,6 +18,7 @@ from app.models.base import Base  # noqa: E402
 # ВАЖНО: импортируем модели, чтобы они зарегистрировались в metadata
 from app.models.user import User  # noqa: F401, E402
 from app.models.letter import Letter  # noqa: F401, E402
+from app.models.user_session import UserSession  # noqa: F401, E402
 
 config = context.config
 

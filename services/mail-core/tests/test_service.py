@@ -1,4 +1,4 @@
-"""Набор unit/smoke-тестов для основной логики mail-core."""
+"""Тесты mail-core: бизнес-логика писем, Telegram flow и cookie-auth."""
 
 from __future__ import annotations
 
@@ -8,14 +8,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import HTTPException
 
-from app.api.auth import login
 from app.api.letters import get_letter, inbox, mark_read, send_letter, sent
 from app.api.users import (
     confirm_telegram_link,
     create_user,
-    get_user,
-    get_user_telegram_contact,
     get_user_by_username,
+    get_user_telegram_contact,
     list_users,
     start_telegram_link,
 )
@@ -26,9 +24,7 @@ from app.models.user import User
 from app.schemas.letter import LetterCreate, MarkReadRequest
 from app.schemas.user import (
     TelegramLinkConfirm,
-    TelegramLinkStartRequest,
     UserCreate,
-    UserLogin,
 )
 from app.ui import web_app
 
@@ -40,6 +36,13 @@ def create_test_user(db_session, username: str):
     return create_user(UserCreate(username=username, password=TEST_PASSWORD), db_session)
 
 
+def login_via_http(client, username: str, password: str = TEST_PASSWORD):
+    return client.post(
+        "/auth/login",
+        json={"username": username, "password": password},
+    )
+
+
 def test_health_returns_ok() -> None:
     # Проверяем самый простой smoke-check сервиса:
     # endpoint /health должен отвечать статусом "ok".
@@ -47,17 +50,17 @@ def test_health_returns_ok() -> None:
 
 
 def test_web_form_route_is_registered() -> None:
-    # Проверяем, что приложение зарегистрировало веб-форму на "/"
-    # и Swagger на "/docs", а также endpoint логина.
+    # Проверяем, что приложение зарегистрировало веб-форму и auth endpoints.
     paths = {route.path for route in app.routes}
     assert "/" in paths
     assert "/auth/login" in paths
+    assert "/auth/logout" in paths
+    assert "/auth/me" in paths
     assert "/docs" in paths
 
 
 def test_web_form_returns_html() -> None:
-    # Проверяем, что корневая страница действительно отдаёт HTML,
-    # а не пустой ответ или JSON.
+    # Проверяем, что корневая страница действительно отдаёт HTML.
     response = web_app()
 
     assert response.media_type == "text/html"
@@ -65,12 +68,11 @@ def test_web_form_returns_html() -> None:
 
 
 def test_create_and_list_users(db_session) -> None:
-    # Проверяем базовый happy path для пользователей:
-    # можно создать нескольких пользователей и потом получить их списком.
+    # Проверяем базовый happy path для пользователей.
     alice = create_test_user(db_session, "alice")
     bob = create_test_user(db_session, "bob")
 
-    users = list_users(db_session)
+    users = list_users(current_user=alice, db=db_session)
 
     assert [user.username for user in users] == ["alice", "bob"]
     assert users[0].id == alice.id
@@ -78,8 +80,7 @@ def test_create_and_list_users(db_session) -> None:
 
 
 def test_create_user_stores_hashed_password(db_session) -> None:
-    # Проверяем, что пароль не хранится в базе в открытом виде:
-    # в users сохраняется password_hash, который можно верифицировать.
+    # Проверяем, что пароль не хранится в базе в открытом виде.
     created_user = create_test_user(db_session, "alice")
     stored_user = db_session.get(User, created_user.id)
 
@@ -89,19 +90,21 @@ def test_create_user_stores_hashed_password(db_session) -> None:
 
 
 def test_get_user_by_username_returns_existing_user(db_session) -> None:
-    # Проверяем lookup по логину:
-    # он нужен форме отправки письма, где получатель указывается по username.
+    # Проверяем lookup по логину для формы отправки письма.
     created_user = create_test_user(db_session, "alice")
 
-    loaded_user = get_user_by_username("alice", db_session)
+    loaded_user = get_user_by_username(
+        "alice",
+        current_user=created_user,
+        db=db_session,
+    )
 
     assert loaded_user.id == created_user.id
     assert loaded_user.username == created_user.username
 
 
 def test_create_user_raises_409_for_duplicate_username(db_session) -> None:
-    # Проверяем бизнес-ограничение уникальности username:
-    # второй пользователь с тем же именем должен давать 409.
+    # Проверяем бизнес-ограничение уникальности username.
     create_test_user(db_session, "alice")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -111,63 +114,70 @@ def test_create_user_raises_409_for_duplicate_username(db_session) -> None:
     assert exc_info.value.detail == "username already exists"
 
 
-def test_get_user_raises_404_when_user_missing(db_session) -> None:
-    # Проверяем сценарий "пользователь не найден":
-    # сервис должен вернуть 404, а не пустой объект.
-    with pytest.raises(HTTPException) as exc_info:
-        get_user(999, db_session)
+def test_auth_me_requires_cookie(client) -> None:
+    # Без cookie-сессии protected endpoint не должен отдавать пользователя.
+    response = client.get("/auth/me")
 
-    assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == "user not found"
+    assert response.status_code == 401
+    assert response.json()["detail"] == "not authenticated"
 
 
-def test_get_user_by_username_raises_404_when_user_missing(db_session) -> None:
-    # Проверяем, что при отправке письма на несуществующий логин
-    # сервер корректно возвращает 404.
-    with pytest.raises(HTTPException) as exc_info:
-        get_user_by_username("missing_user", db_session)
-
-    assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == "user not found"
-
-
-def test_login_returns_user_for_valid_credentials(db_session) -> None:
-    # Проверяем успешный вход:
-    # если username и пароль верные, сервис возвращает пользователя.
+def test_login_sets_cookie_and_auth_me_returns_user(client, db_session) -> None:
+    # Успешный логин должен выдать cookie и открыть доступ к /auth/me.
     created_user = create_test_user(db_session, "alice")
 
-    logged_in_user = login(
-        UserLogin(username="alice", password=TEST_PASSWORD),
-        db_session,
-    )
+    login_response = login_via_http(client, "alice")
+    me_response = client.get("/auth/me")
 
-    assert logged_in_user.id == created_user.id
-    assert logged_in_user.username == created_user.username
+    assert login_response.status_code == 200
+    assert login_response.cookies.get(settings.auth_cookie_name)
+    assert me_response.status_code == 200
+    assert me_response.json()["id"] == created_user.id
+    assert me_response.json()["username"] == created_user.username
 
 
-def test_login_raises_401_for_invalid_password(db_session) -> None:
-    # Проверяем ошибку входа:
-    # неверный пароль должен приводить к 401.
+def test_login_raises_401_for_invalid_password(client, db_session) -> None:
+    # Неверный пароль не должен создавать сессию.
     create_test_user(db_session, "alice")
 
-    with pytest.raises(HTTPException) as exc_info:
-        login(UserLogin(username="alice", password="wrongpass123"), db_session)
+    response = login_via_http(client, "alice", "wrongpass123")
 
-    assert exc_info.value.status_code == 401
-    assert exc_info.value.detail == "invalid username or password"
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid username or password"
+
+
+def test_logout_invalidates_session(client, db_session) -> None:
+    # После logout cookie удаляется, а доступ к /auth/me пропадает.
+    create_test_user(db_session, "alice")
+    login_via_http(client, "alice")
+
+    logout_response = client.post("/auth/logout")
+    me_response = client.get("/auth/me")
+
+    assert logout_response.status_code == 200
+    assert logout_response.json()["status"] == "logged out"
+    assert me_response.status_code == 401
+
+
+def test_letter_routes_require_cookie(client, db_session) -> None:
+    # Пользовательские маршруты писем не должны быть открыты без логина.
+    alice = create_test_user(db_session, "alice")
+
+    response = client.get(f"/letters/inbox/{alice.id}")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "not authenticated"
 
 
 def test_start_telegram_link_returns_token_and_deep_link(db_session, monkeypatch) -> None:
-    # Проверяем старт привязки Telegram:
-    # при правильном пароле сервис должен выдать одноразовый токен
-    # и deep-link для будущего Telegram-бота.
+    # Активной сессии достаточно, чтобы выпустить одноразовый токен и deep-link.
     monkeypatch.setattr(settings, "telegram_bot_username", "mail_system_test_bot")
     user = create_test_user(db_session, "alice")
 
     result = start_telegram_link(
         user.id,
-        TelegramLinkStartRequest(password=TEST_PASSWORD),
-        db_session,
+        current_user=user,
+        db=db_session,
     )
     stored_user = db_session.get(User, user.id)
 
@@ -179,31 +189,29 @@ def test_start_telegram_link_returns_token_and_deep_link(db_session, monkeypatch
     assert result.telegram_deep_link == f"https://t.me/mail_system_test_bot?start={result.link_token}"
 
 
-def test_start_telegram_link_rejects_invalid_password(db_session) -> None:
-    # Проверяем защиту старта привязки:
-    # без подтверждения паролем нельзя выпустить токен для Telegram.
-    user = create_test_user(db_session, "alice")
+def test_start_telegram_link_rejects_other_user(db_session) -> None:
+    # Нельзя начать привязку Telegram для чужого user_id даже с валидной cookie-сессией.
+    alice = create_test_user(db_session, "alice")
+    bob = create_test_user(db_session, "bob")
 
     with pytest.raises(HTTPException) as exc_info:
         start_telegram_link(
-            user.id,
-            TelegramLinkStartRequest(password="wrongpass123"),
-            db_session,
+            bob.id,
+            current_user=alice,
+            db=db_session,
         )
 
-    assert exc_info.value.status_code == 401
-    assert exc_info.value.detail == "invalid password"
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "forbidden for another user"
 
 
 def test_confirm_telegram_link_binds_chat_and_clears_token(db_session) -> None:
-    # Проверяем успешное подтверждение Telegram:
-    # подтверждённый chat_id и username сохраняются в профиле,
-    # а одноразовый токен после использования очищается.
+    # После подтверждения chat_id сохраняется, а токен очищается.
     user = create_test_user(db_session, "alice")
     start_result = start_telegram_link(
         user.id,
-        TelegramLinkStartRequest(password=TEST_PASSWORD),
-        db_session,
+        current_user=user,
+        db=db_session,
     )
 
     linked_user = confirm_telegram_link(
@@ -212,7 +220,7 @@ def test_confirm_telegram_link_binds_chat_and_clears_token(db_session) -> None:
             chat_id="chat-1001",
             telegram_username="alice_mail",
         ),
-        db_session,
+        db=db_session,
     )
     stored_user = db_session.get(User, user.id)
 
@@ -225,13 +233,12 @@ def test_confirm_telegram_link_binds_chat_and_clears_token(db_session) -> None:
 
 
 def test_get_user_telegram_contact_returns_linked_chat_data(db_session) -> None:
-    # Проверяем внутренний endpoint для communicator:
-    # после подтверждения привязки сервис должен отдать chat_id и метаданные Telegram.
+    # Internal endpoint для communicator должен отдать chat_id и метаданные Telegram.
     user = create_test_user(db_session, "alice")
     start_result = start_telegram_link(
         user.id,
-        TelegramLinkStartRequest(password=TEST_PASSWORD),
-        db_session,
+        current_user=user,
+        db=db_session,
     )
     confirm_telegram_link(
         TelegramLinkConfirm(
@@ -239,7 +246,7 @@ def test_get_user_telegram_contact_returns_linked_chat_data(db_session) -> None:
             chat_id="chat-5555",
             telegram_username="alice_mail",
         ),
-        db_session,
+        db=db_session,
     )
 
     contact = get_user_telegram_contact(user.id, db_session)
@@ -251,15 +258,13 @@ def test_get_user_telegram_contact_returns_linked_chat_data(db_session) -> None:
 
 
 def test_confirm_telegram_link_rejects_expired_token(db_session, monkeypatch) -> None:
-    # Проверяем срок жизни токена:
-    # если Telegram подтвердил ссылку слишком поздно, токен должен
-    # стать недействительным и больше не оставаться в профиле.
+    # Просроченный Telegram token должен стать недействительным и очиститься.
     monkeypatch.setattr(settings, "telegram_link_token_ttl_minutes", 15)
     user = create_test_user(db_session, "alice")
     start_result = start_telegram_link(
         user.id,
-        TelegramLinkStartRequest(password=TEST_PASSWORD),
-        db_session,
+        current_user=user,
+        db=db_session,
     )
 
     stored_user = db_session.get(User, user.id)
@@ -277,7 +282,7 @@ def test_confirm_telegram_link_rejects_expired_token(db_session, monkeypatch) ->
                 chat_id="chat-2002",
                 telegram_username="alice_mail",
             ),
-            db_session,
+            db=db_session,
         )
 
     expired_user = db_session.get(User, user.id)
@@ -289,21 +294,19 @@ def test_confirm_telegram_link_rejects_expired_token(db_session, monkeypatch) ->
 
 
 def test_confirm_telegram_link_allows_same_chat_id_for_multiple_accounts(db_session) -> None:
-    # Проверяем новое правило привязки:
-    # один и тот же Telegram chat_id можно использовать для нескольких аккаунтов
-    # одного и того же пользователя.
+    # Один и тот же Telegram chat_id можно использовать для нескольких аккаунтов.
     alice = create_test_user(db_session, "alice")
     bob = create_test_user(db_session, "bob")
 
     alice_link = start_telegram_link(
         alice.id,
-        TelegramLinkStartRequest(password=TEST_PASSWORD),
-        db_session,
+        current_user=alice,
+        db=db_session,
     )
     bob_link = start_telegram_link(
         bob.id,
-        TelegramLinkStartRequest(password=TEST_PASSWORD),
-        db_session,
+        current_user=bob,
+        db=db_session,
     )
 
     confirm_telegram_link(
@@ -312,7 +315,7 @@ def test_confirm_telegram_link_allows_same_chat_id_for_multiple_accounts(db_sess
             chat_id="chat-3003",
             telegram_username="alice_mail",
         ),
-        db_session,
+        db=db_session,
     )
 
     linked_bob = confirm_telegram_link(
@@ -321,7 +324,7 @@ def test_confirm_telegram_link_allows_same_chat_id_for_multiple_accounts(db_sess
             chat_id="chat-3003",
             telegram_username="bob_mail",
         ),
-        db_session,
+        db=db_session,
     )
     alice_user = db_session.get(User, alice.id)
     bob_user = db_session.get(User, bob.id)
@@ -334,9 +337,7 @@ def test_confirm_telegram_link_allows_same_chat_id_for_multiple_accounts(db_sess
 
 
 def test_send_letter_and_read_mailboxes(db_session) -> None:
-    # Проверяем основной сценарий писем:
-    # письмо создаётся, находится по id, попадает во входящие получателя
-    # и в отправленные отправителя.
+    # Письмо должно попасть во входящие получателя и в отправленные отправителя.
     alice = create_test_user(db_session, "alice")
     bob = create_test_user(db_session, "bob")
 
@@ -348,13 +349,14 @@ def test_send_letter_and_read_mailboxes(db_session) -> None:
                 subject="Hello",
                 body="How are you?",
             ),
-            db_session,
+            current_user=alice,
+            db=db_session,
         )
     )
 
-    loaded_letter = get_letter(letter.id, db_session)
-    bob_inbox = inbox(bob.id, False, 50, 0, db_session)
-    alice_sent = sent(alice.id, 50, 0, db_session)
+    loaded_letter = get_letter(letter.id, current_user=alice, db=db_session)
+    bob_inbox = inbox(bob.id, False, 50, 0, current_user=bob, db=db_session)
+    alice_sent = sent(alice.id, 50, 0, current_user=alice, db=db_session)
 
     assert loaded_letter.id == letter.id
     assert loaded_letter.is_read is False
@@ -363,9 +365,7 @@ def test_send_letter_and_read_mailboxes(db_session) -> None:
 
 
 def test_inbox_unread_only_filters_read_letters(db_session) -> None:
-    # Проверяем фильтр unread_only:
-    # после отметки одного письма как прочитанного
-    # во входящих с unread_only=True должно остаться только непрочитанное.
+    # unread_only=True должен оставлять только непрочитанные письма.
     alice = create_test_user(db_session, "alice")
     bob = create_test_user(db_session, "bob")
 
@@ -377,7 +377,8 @@ def test_inbox_unread_only_filters_read_letters(db_session) -> None:
                 subject="First",
                 body="First body",
             ),
-            db_session,
+            current_user=alice,
+            db=db_session,
         )
     )
     second_letter = asyncio.run(
@@ -388,18 +389,23 @@ def test_inbox_unread_only_filters_read_letters(db_session) -> None:
                 subject="Second",
                 body="Second body",
             ),
-            db_session,
+            current_user=alice,
+            db=db_session,
         )
     )
 
-    mark_read(first_letter.id, MarkReadRequest(user_id=bob.id), db_session)
-    unread_letters = inbox(bob.id, True, 50, 0, db_session)
+    mark_read(
+        first_letter.id,
+        MarkReadRequest(user_id=bob.id),
+        current_user=bob,
+        db=db_session,
+    )
+    unread_letters = inbox(bob.id, True, 50, 0, current_user=bob, db=db_session)
 
     assert [letter.id for letter in unread_letters] == [second_letter.id]
 
 
 def test_send_letter_rejects_same_sender_and_recipient(db_session) -> None:
-    # Проверяем защиту от отправки письма самому себе:
     # sender_id и recipient_id не должны совпадать.
     alice = create_test_user(db_session, "alice")
 
@@ -412,7 +418,8 @@ def test_send_letter_rejects_same_sender_and_recipient(db_session) -> None:
                     subject="Oops",
                     body="This should fail",
                 ),
-                db_session,
+                current_user=alice,
+                db=db_session,
             )
         )
 
@@ -420,29 +427,53 @@ def test_send_letter_rejects_same_sender_and_recipient(db_session) -> None:
     assert exc_info.value.detail == "sender_id cannot equal recipient_id"
 
 
-def test_send_letter_requires_existing_users(db_session) -> None:
-    # Проверяем, что письмо нельзя создать с несуществующими пользователями:
-    # сервис должен явно вернуть 404 по sender/recipient.
+def test_send_letter_requires_existing_recipient(db_session) -> None:
+    # recipient должен существовать в базе.
+    alice = create_test_user(db_session, "alice")
+
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             send_letter(
                 LetterCreate(
-                    sender_id=1,
-                    recipient_id=2,
-                    subject="Missing users",
-                    body="No users in database",
+                    sender_id=alice.id,
+                    recipient_id=999,
+                    subject="Missing recipient",
+                    body="No such user",
                 ),
-                db_session,
+                current_user=alice,
+                db=db_session,
             )
         )
 
     assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == "sender user not found"
+    assert exc_info.value.detail == "recipient user not found"
+
+
+def test_send_letter_rejects_spoofed_sender(db_session) -> None:
+    # Cookie-сессия должна запрещать отправку письма от чужого sender_id.
+    alice = create_test_user(db_session, "alice")
+    bob = create_test_user(db_session, "bob")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            send_letter(
+                LetterCreate(
+                    sender_id=bob.id,
+                    recipient_id=alice.id,
+                    subject="Spoofed",
+                    body="This should be forbidden",
+                ),
+                current_user=alice,
+                db=db_session,
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "sender_id must match current user"
 
 
 def test_mark_read_allows_only_recipient(db_session) -> None:
-    # Проверяем правило доступа:
-    # отметить письмо прочитанным может только получатель, не отправитель.
+    # Отметить письмо прочитанным может только получатель.
     alice = create_test_user(db_session, "alice")
     bob = create_test_user(db_session, "bob")
 
@@ -454,20 +485,55 @@ def test_mark_read_allows_only_recipient(db_session) -> None:
                 subject="Private",
                 body="Recipient should mark this read",
             ),
-            db_session,
+            current_user=alice,
+            db=db_session,
         )
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        mark_read(letter.id, MarkReadRequest(user_id=alice.id), db_session)
+        mark_read(
+            letter.id,
+            MarkReadRequest(user_id=alice.id),
+            current_user=alice,
+            db=db_session,
+        )
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "only recipient can mark as read"
 
 
+def test_mark_read_rejects_spoofed_user_id(db_session) -> None:
+    # Даже получатель не может подставить в body чужой user_id.
+    alice = create_test_user(db_session, "alice")
+    bob = create_test_user(db_session, "bob")
+
+    letter = asyncio.run(
+        send_letter(
+            LetterCreate(
+                sender_id=alice.id,
+                recipient_id=bob.id,
+                subject="Body spoofing",
+                body="Current user and user_id must match",
+            ),
+            current_user=alice,
+            db=db_session,
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        mark_read(
+            letter.id,
+            MarkReadRequest(user_id=alice.id),
+            current_user=bob,
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "user_id must match current user"
+
+
 def test_mark_read_sets_read_flags_for_recipient(db_session) -> None:
-    # Проверяем успешный сценарий mark_read:
-    # письмо становится прочитанным и получает timestamp в read_at.
+    # Успешный mark_read должен проставить is_read и read_at.
     alice = create_test_user(db_session, "alice")
     bob = create_test_user(db_session, "bob")
 
@@ -479,11 +545,17 @@ def test_mark_read_sets_read_flags_for_recipient(db_session) -> None:
                 subject="Status update",
                 body="Please read this letter",
             ),
-            db_session,
+            current_user=alice,
+            db=db_session,
         )
     )
 
-    updated_letter = mark_read(letter.id, MarkReadRequest(user_id=bob.id), db_session)
+    updated_letter = mark_read(
+        letter.id,
+        MarkReadRequest(user_id=bob.id),
+        current_user=bob,
+        db=db_session,
+    )
 
     assert updated_letter.is_read is True
     assert updated_letter.read_at is not None
